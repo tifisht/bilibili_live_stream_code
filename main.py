@@ -108,6 +108,25 @@ if __name__ == '__main__':
 
         window.show()
 
+    # --- 全局清理逻辑 ---
+    def cleanup_services(api_service):
+        """执行清理工作：停止直播、停止弹幕、保存配置"""
+        try:
+            # 1. 停止直播
+            if api_service.session_state.is_live:
+                api_service.live_service.stop_live()
+            
+            # 2. 停止弹幕
+            import asyncio
+            if api_service.loop:
+                 asyncio.run_coroutine_threadsafe(api_service.danmu_service.stop(), api_service.loop)
+
+            # 3. 保存配置
+            api_service.config_manager.save()
+            print("Services cleaned up.")
+        except Exception as e:
+            print(f"Cleanup failed: {e}")
+
     # --- 托盘图标逻辑 (Windows Only) ---
     if sys.platform == 'win32':
         import threading
@@ -118,23 +137,6 @@ if __name__ == '__main__':
         # 全局标志
         tray_state = {'is_exiting': False}
         tray_icon = None
-
-        def cleanup_services(api_service):
-            """执行清理工作：停止直播、停止弹幕、保存配置"""
-            try:
-                # 1. 停止直播
-                if api_service.session_state.is_live:
-                    api_service.live_service.stop_live()
-                
-                # 2. 停止弹幕
-                import asyncio
-                if api_service.loop:
-                     asyncio.run_coroutine_threadsafe(api_service.danmu_service.stop(), api_service.loop)
-
-                # 3. 保存配置
-                api_service.config_manager.save()
-            except Exception as e:
-                logger.error(f"Cleanup failed: {e}")
 
         def create_tray_icon(api_service, window_obj):
             def on_show_window(icon, item):
@@ -160,10 +162,12 @@ if __name__ == '__main__':
                 tray_state['is_exiting'] = True
                 icon.stop()
                 
+                print("Tray exit clicked. Cleaning up...")
                 cleanup_services(api_service)
 
-                # 销毁窗口，这会触发 closing 事件，但 is_exiting=True 会让它直接通过
-                window_obj.destroy()
+                # [Fix] 直接退出进程，避免调用 delete/destroy 导致的跨线程死锁
+                # 销毁窗口可能会触发 on_closing，而 on_closing 在 UI 线程运行，可能导致死锁
+                print("Exiting application via Tray...")
                 os._exit(0)
 
             # 加载图标
@@ -189,31 +193,51 @@ if __name__ == '__main__':
             return icon
 
         def on_closing():
-            if tray_state['is_exiting']:
-                return True # 正在退出，允许关闭
-            
-            # 检查配置
-            min_to_tray = api.config_manager.data.get("min_to_tray", True)
-            
-            if min_to_tray:
-                # 最小化到托盘
-                window.hide()
-                return False # 阻止窗口关闭
-            else:
-                # 直接退出模式
-                tray_state['is_exiting'] = True
-                if tray_icon:
-                    tray_icon.stop()
+            # 使用 print 而非 logger，避免在关闭期间发生 logging 死锁
+            try:
+                if tray_state['is_exiting']:
+                    return True # 正在退出，允许关闭
                 
-                cleanup_services(api)
-                return True # 允许窗口关闭 (pywebview 会退出)
+                # 检查配置
+                min_to_tray = True
+                try:
+                    min_to_tray = api.config_manager.data.get("min_to_tray", True)
+                except Exception as e:
+                    print(f"Error reading config: {e}")
+
+                if min_to_tray:
+                    # 最小化到托盘
+                    window.hide()
+                    return False # 阻止窗口关闭
+                else:
+                    # 直接退出模式
+                    tray_state['is_exiting'] = True
+                    if tray_icon:
+                        tray_icon.stop()
+                    
+                    cleanup_services(api)
+                    return True # 允许窗口关闭 (pywebview 会退出)
+            except Exception as e:
+                print(f"Error in on_closing: {e}")
+                # 发生错误时，为了防止卡死，允许关闭
+                return True
 
         # 启动托盘图标线程
         tray_icon = create_tray_icon(api, window)
         threading.Thread(target=tray_icon.run, daemon=True).start()
 
-
         # 绑定关闭事件
         window.events.closing += on_closing
+
+    else:
+        # 非 Windows 平台通用的退出逻辑
+        def on_non_win_closing():
+            logger.info("Closing window on non-Windows platform...")
+            cleanup_services(api)
+            # 这种情况下 pywebview 应该会正常退出，但如果后台线程卡住，可以考虑在这里强制退出
+            # os._exit(0) # 可选，视情况而定
+            return True
+
+        window.events.closing += on_non_win_closing
 
     webview.start(center_and_show_window, window)
