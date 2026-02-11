@@ -232,10 +232,13 @@ if __name__ == '__main__':
     else:
         # 非 Windows 平台通用的退出逻辑
         def on_non_win_closing():
-            logger.info("Closing window on non-Windows platform...")
+            # logger.info("Closing window on non-Windows platform...")
+            print("Closing window on non-Windows platform...")
             cleanup_services(api)
-            # 这种情况下 pywebview 应该会正常退出，但如果后台线程卡住，可以考虑在这里强制退出
-            # os._exit(0) # 可选，视情况而定
+            
+            # [Fix] 强制退出，防止后台线程（如 asyncio loop）导致进程无法终止
+            print("Exiting application...")
+            os._exit(0)
             return True
 
         window.events.closing += on_non_win_closing
