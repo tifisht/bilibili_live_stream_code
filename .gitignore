@@ -2,6 +2,7 @@
 config.json
 last_settings.json
 cookies.txt
+api_md/
 
 # --- Python ---
 .venv/
