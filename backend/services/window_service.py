@@ -5,12 +5,13 @@ logger = logging.getLogger("WindowService")
 
 class WindowService:
     def __init__(self):
-        self.window = None
+        # [Fix] 移除 self.window 引用，避免 pywebview 遍历 ApiService -> WindowService -> window 导致递归错误
+        pass
 
     def _get_window(self):
-        if not self.window and len(webview.windows) > 0:
-            self.window = webview.windows[0]
-        return self.window
+        if len(webview.windows) > 0:
+            return webview.windows[0]
+        return None
 
     def window_min(self):
         window = self._get_window()
@@ -56,4 +57,8 @@ class WindowService:
             json_data = json.dumps(data)
             # 这里的引号处理要小心
             js_code = f"if(window.{function_name}) window.{function_name}({json_data})"
-            window.evaluate_js(js_code)
+            try:
+                window.evaluate_js(js_code)
+            except Exception:
+                # 忽略窗口关闭期间无法执行 JS 的错误 (如 ObjectDisposedException)
+                pass
