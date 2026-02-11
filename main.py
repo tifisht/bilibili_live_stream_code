@@ -194,8 +194,8 @@ if __name__ == '__main__':
 
             menu = pystray.Menu(
                 item('显示主界面', on_show_window, default=True),
-                item('开始直播', on_start_live),
-                item('停止直播', on_stop_live),
+                # item('开始直播', on_start_live),
+                # item('停止直播', on_stop_live),
                 item('退出程序', on_exit)
             )
 
