@@ -10,3 +10,4 @@ PyQt5>=5.15.0
 PyQtWebEngine>=5.15.0
 cffi>=1.15.0
 brotli>=1.0.9
+pystray

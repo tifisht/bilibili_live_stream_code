@@ -14,7 +14,7 @@ const log = (msg) => {
   const time = new Date().toLocaleTimeString();
   // 修改为 push，最新的在最下面
   state.logs.push(`[${time}] ${msg}`);
-  
+
   // 限制日志数量，防止内存溢出
   if (state.logs.length > 500) {
     state.logs.shift();
@@ -182,11 +182,21 @@ export const useBridge = () => {
     async stopDanmuMonitor() {
       return await callPy('stop_danmu_monitor');
     },
-    
+
     // 发送弹幕
     async sendDanmu(msg) {
       const res = await callPy('send_danmu', msg);
       return res;
+    },
+
+    // App 配置
+    async getAppConfig() {
+      const res = await callPy('get_app_config');
+      return res.code === 0 ? res.data : { min_to_tray: true, is_win32: false };
+    },
+    async setAppConfig(key, value) {
+      const res = await callPy('set_app_config', key, value);
+      return res.code === 0;
     }
   };
 };

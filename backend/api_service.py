@@ -137,3 +137,19 @@ class ApiService:
     def send_danmu(self, msg):
         """发送弹幕"""
         return self.danmu_service.send_danmu(msg)
+
+    # --- App Config Methods ---
+    def get_app_config(self):
+        import sys
+        config = {
+            "min_to_tray": self.config_manager.data.get("min_to_tray", True),
+            "is_win32": sys.platform == 'win32'
+        }
+        return {"code": 0, "data": config}
+
+    def set_app_config(self, key, value):
+        if key == "min_to_tray":
+            self.config_manager.data["min_to_tray"] = bool(value)
+            self.config_manager.save()
+            return {"code": 0}
+        return {"code": -1, "msg": "Unknown config key"}

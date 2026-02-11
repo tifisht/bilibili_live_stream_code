@@ -107,4 +107,113 @@ if __name__ == '__main__':
                 logger.error(f"Failed to set window style: {e}")
 
         window.show()
+
+    # --- 托盘图标逻辑 (Windows Only) ---
+    if sys.platform == 'win32':
+        import threading
+        from PIL import Image
+        import pystray
+        from pystray import MenuItem as item
+
+        # 全局标志
+        tray_state = {'is_exiting': False}
+        tray_icon = None
+
+        def cleanup_services(api_service):
+            """执行清理工作：停止直播、停止弹幕、保存配置"""
+            try:
+                # 1. 停止直播
+                if api_service.session_state.is_live:
+                    api_service.live_service.stop_live()
+                
+                # 2. 停止弹幕
+                import asyncio
+                if api_service.loop:
+                     asyncio.run_coroutine_threadsafe(api_service.danmu_service.stop(), api_service.loop)
+
+                # 3. 保存配置
+                api_service.config_manager.save()
+            except Exception as e:
+                logger.error(f"Cleanup failed: {e}")
+
+        def create_tray_icon(api_service, window_obj):
+            def on_show_window(icon, item):
+                window_obj.restore()
+                window_obj.show()
+
+            def on_start_live(icon, item):
+                user_config = api_service.user_service.load_saved_config()
+                if user_config and 'last_area_name' in user_config:
+                    area = user_config['last_area_name']
+                    if isinstance(area, list) and len(area) >= 2:
+                        api_service.start_live(area[0], area[1])
+                    else:
+                        api_service.start_live()
+                else:
+                    api_service.start_live()
+                window_obj.show()
+
+            def on_stop_live(icon, item):
+                api_service.stop_live()
+
+            def on_exit(icon, item):
+                tray_state['is_exiting'] = True
+                icon.stop()
+                
+                cleanup_services(api_service)
+
+                # 销毁窗口，这会触发 closing 事件，但 is_exiting=True 会让它直接通过
+                window_obj.destroy()
+                os._exit(0)
+
+            # 加载图标
+            icon_image = None
+            try:
+                if getattr(sys, 'frozen', False):
+                    icon_path = os.path.join(sys._MEIPASS, 'bilibili.ico')
+                else:
+                    icon_path = os.path.join(os.getcwd(), 'bilibili.ico')
+                icon_image = Image.open(icon_path)
+            except Exception as e:
+                logger.error(f"Failed to load tray icon: {e}")
+                icon_image = Image.new('RGB', (64, 64), color='red')
+
+            menu = pystray.Menu(
+                item('显示主界面', on_show_window, default=True),
+                item('开始直播', on_start_live),
+                item('停止直播', on_stop_live),
+                item('退出程序', on_exit)
+            )
+
+            icon = pystray.Icon("BiliLiveTool", icon_image, "B站直播工具", menu)
+            return icon
+
+        def on_closing():
+            if tray_state['is_exiting']:
+                return True # 正在退出，允许关闭
+            
+            # 检查配置
+            min_to_tray = api.config_manager.data.get("min_to_tray", True)
+            
+            if min_to_tray:
+                # 最小化到托盘
+                window.hide()
+                return False # 阻止窗口关闭
+            else:
+                # 直接退出模式
+                tray_state['is_exiting'] = True
+                if tray_icon:
+                    tray_icon.stop()
+                
+                cleanup_services(api)
+                return True # 允许窗口关闭 (pywebview 会退出)
+
+        # 启动托盘图标线程
+        tray_icon = create_tray_icon(api, window)
+        threading.Thread(target=tray_icon.run, daemon=True).start()
+
+
+        # 绑定关闭事件
+        window.events.closing += on_closing
+
     webview.start(center_and_show_window, window)

@@ -20,7 +20,7 @@ class Config:
         self.data = self._load_config()
 
     def _load_config(self):
-        default_config = {"users": {}, "current_uid": None}
+        default_config = {"users": {}, "current_uid": None, "min_to_tray": True}
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -40,7 +40,8 @@ class Config:
                                         "last_area_name": data.get("last_area_name", [])
                                     }
                                 },
-                                "current_uid": uid
+                                "current_uid": uid,
+                                "min_to_tray": True # Default to True
                             }
                         except: pass
                     return data
