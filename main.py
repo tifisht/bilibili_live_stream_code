@@ -130,15 +130,25 @@ if __name__ == '__main__':
     # --- 托盘图标逻辑 (Windows Only) ---
     if sys.platform == 'win32':
         import threading
-        from PIL import Image
-        import pystray
-        from pystray import MenuItem as item
+        # 延迟导入 PIL 和 pystray 以加快启动速度
+        # from PIL import Image
+        # import pystray
+        # from pystray import MenuItem as item
 
         # 全局标志
         tray_state = {'is_exiting': False}
         tray_icon = None
 
         def create_tray_icon(api_service, window_obj):
+            # 在线程内部导入，避免阻塞主线程
+            try:
+                from PIL import Image
+                import pystray
+                from pystray import MenuItem as item
+            except ImportError as e:
+                print(f"Failed to import tray dependencies: {e}")
+                return None
+
             def on_show_window(icon, item):
                 window_obj.restore()
                 window_obj.show()
@@ -222,9 +232,15 @@ if __name__ == '__main__':
                 # 发生错误时，为了防止卡死，允许关闭
                 return True
 
-        # 启动托盘图标线程
-        tray_icon = create_tray_icon(api, window)
-        threading.Thread(target=tray_icon.run, daemon=True).start()
+        # 启动托盘图标线程 (异步加载，防止阻塞启动)
+        def run_tray():
+            global tray_icon
+            icon = create_tray_icon(api, window)
+            if icon:
+                tray_icon = icon
+                tray_icon.run()
+        
+        threading.Thread(target=run_tray, daemon=True).start()
 
         # 绑定关闭事件
         window.events.closing += on_closing
