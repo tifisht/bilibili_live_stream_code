@@ -1,5 +1,10 @@
 import os
 import sys
+
+# [修复] 强制 Linux 下使用 x11 后端以支持 window.move (解决 Wayland 下无法拖拽的问题)
+if sys.platform != 'win32':
+    os.environ["GDK_BACKEND"] = "x11"
+
 import webview
 import logging
 from logging.handlers import RotatingFileHandler
@@ -49,7 +54,7 @@ if __name__ == '__main__':
         width=window_width,
         height=window_height,
         frameless=True,
-        easy_drag=False,
+        easy_drag=False, # [修复] 禁用 easy_drag，在 Linux (GDK_BACKEND=x11) 下依靠前端自定义拖拽
         # hidden=True
     )
     def center_and_show_window(window):
