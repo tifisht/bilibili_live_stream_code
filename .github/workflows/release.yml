@@ -142,12 +142,14 @@ jobs:
           --name BiliLiveTool \
           --onefile \
           --add-data "frontend/dist:frontend/dist" \
+          --add-data "bilibili.ico;." \
           --icon "$ICON_NAME" \
           $EXTRA_ARGS \
           ${{ matrix.pyinstaller_options }}
         elif [ "${{ matrix.os }}" == "ubuntu-latest" ]; then
            pyinstaller main.py --name BiliLiveTool --onefile \
             --add-data "frontend/dist:frontend/dist" \
+            --add-data "bilibili.ico:." \
             --hidden-import _cffi_backend \
             --hidden-import cffi \
             --hidden-import qtpy \
@@ -162,6 +164,7 @@ jobs:
               --name BiliLiveTool \
               --onefile \
               --add-data "frontend/dist:frontend/dist" \
+              --add-data "bilibili.ico:." \
               --icon "$ICON_NAME" \
               $EXTRA_ARGS \
               ${{ matrix.pyinstaller_options }}
