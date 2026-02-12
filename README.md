@@ -92,6 +92,7 @@
      ```bash
      pyinstaller main.py --name BiliLiveTool --onefile \
       --add-data "frontend/dist:frontend/dist" \
+      --add-data "bilibili.ico:." \
       --icon "bilibili.png" \
       --hidden-import _cffi_backend \
       --hidden-import cffi \
