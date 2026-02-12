@@ -144,8 +144,10 @@ if __name__ == '__main__':
 
     # --- 通用托盘回调（跨平台共享） ---
     def tray_show_window():
-        window.restore()
+        import time
         window.show()
+        time.sleep(0.1)
+        window.restore()
         # 通知前端恢复轮询等操作
         try:
             api.window_service.send_to_frontend("onAppShown", None)
@@ -220,7 +222,11 @@ if __name__ == '__main__':
 
             if min_to_tray:
                 # 最小化到托盘
-                window.hide()
+                if sys.platform == 'win32':
+                    window.hide()
+                else:
+                    # [Fix] Linux Qt backend: hide() 可能导致窗口无法恢复，用 minimize 代替
+                    window.minimize()
                 # [Fix] 异步通知前端暂停轮询，不能同步调用 evaluate_js，否则在 UI 线程死锁
                 threading.Thread(
                     target=lambda: api.window_service.send_to_frontend("onAppHidden", None),
@@ -328,7 +334,7 @@ if __name__ == '__main__':
 
             # 显示主界面
             item_show = Gtk.MenuItem(label='显示主界面')
-            item_show.connect('activate', lambda _: GLib.idle_add(tray_show_window))
+            item_show.connect('activate', lambda _: threading.Thread(target=tray_show_window, daemon=True).start())
             menu.append(item_show)
 
             # 分隔线
