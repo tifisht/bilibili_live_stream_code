@@ -7,6 +7,7 @@ const { state, getAppConfig, setAppConfig } = useBridge();
 
 const logsContainer = ref(null);
 const isWin32 = ref(false);
+const hasTray = ref(false);
 const minToTray = ref(true);
 
 onMounted(async () => {
@@ -14,6 +15,7 @@ onMounted(async () => {
     const config = await getAppConfig();
     if (config) {
       isWin32.value = config.is_win32;
+      hasTray.value = config.has_tray || config.is_win32;
       minToTray.value = config.min_to_tray;
     }
   } catch (e) {
@@ -38,7 +40,7 @@ watch(() => state.logs.length, () => {
   <div class="panel fade-in">
     <div class="panel-header">
       <h2>控制台</h2>
-      <div v-if="isWin32" class="tray-toggle">
+      <div v-if="hasTray" class="tray-toggle">
         <span class="label-text">关闭时最小化到托盘</span>
         <label class="switch">
           <input type="checkbox" v-model="minToTray" @change="updateTrayConfig">

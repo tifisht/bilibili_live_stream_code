@@ -141,9 +141,22 @@ class ApiService:
     # --- App Config Methods ---
     def get_app_config(self):
         import sys
+        # 判断是否有托盘支持
+        has_tray = False
+        if sys.platform == 'win32':
+            has_tray = True
+        else:
+            # Linux: 检测 AppIndicator 依赖是否可用
+            try:
+                import gi
+                gi.require_version('AyatanaAppIndicator3', '0.1')
+                has_tray = True
+            except (ImportError, ValueError):
+                pass
         config = {
             "min_to_tray": self.config_manager.data.get("min_to_tray", True),
-            "is_win32": sys.platform == 'win32'
+            "is_win32": sys.platform == 'win32',
+            "has_tray": has_tray
         }
         return {"code": 0, "data": config}
 

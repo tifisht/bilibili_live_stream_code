@@ -192,7 +192,7 @@ export const useBridge = () => {
     // App 配置
     async getAppConfig() {
       const res = await callPy('get_app_config');
-      return res.code === 0 ? res.data : { min_to_tray: true, is_win32: false };
+      return res.code === 0 ? res.data : { min_to_tray: true, is_win32: false, has_tray: false };
     },
     async setAppConfig(key, value) {
       const res = await callPy('set_app_config', key, value);
