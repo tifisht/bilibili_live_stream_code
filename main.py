@@ -158,15 +158,29 @@ if __name__ == '__main__':
                 if user_config and 'last_area_name' in user_config:
                     area = user_config['last_area_name']
                     if isinstance(area, list) and len(area) >= 2:
-                        api_service.start_live(area[0], area[1])
+                        res = api_service.start_live(area[0], area[1])
                     else:
-                        api_service.start_live()
+                        res = api_service.start_live()
                 else:
-                    api_service.start_live()
+                    res = api_service.start_live()
+
+                # 恢复并显示窗口
+                window_obj.restore()
                 window_obj.show()
 
+                # 根据返回结果推送事件到前端
+                if res and res.get('code') == 0:
+                    api_service.window_service.send_to_frontend("onTrayLiveStarted", res.get('data'))
+                elif res and res.get('code') == 60024:
+                    api_service.window_service.send_to_frontend("onTrayNeedFaceVerify", res.get('qr', ''))
+                else:
+                    msg = res.get('msg', '开播失败') if res else '开播失败'
+                    api_service.window_service.send_to_frontend("onTrayLiveError", msg)
+
             def on_stop_live(icon, item):
-                api_service.stop_live()
+                res = api_service.stop_live()
+                if res and res.get('code') == 0:
+                    api_service.window_service.send_to_frontend("onTrayLiveStopped", None)
 
             def on_exit(icon, item):
                 tray_state['is_exiting'] = True
@@ -194,8 +208,8 @@ if __name__ == '__main__':
 
             menu = pystray.Menu(
                 item('显示主界面', on_show_window, default=True),
-                # item('开始直播', on_start_live),
-                # item('停止直播', on_stop_live),
+                item('开始直播', on_start_live),
+                item('停止直播', on_stop_live),
                 item('退出程序', on_exit)
             )
 

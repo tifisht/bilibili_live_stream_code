@@ -1,5 +1,6 @@
 <script setup>
-import { ref, reactive, onMounted, provide } from 'vue';
+import { ref, reactive, onMounted, onUnmounted, provide } from 'vue';
+import QRCode from 'qrcode';
 import { useBridge } from '@/api/bridge';
 import Sidebar from '@/components/Sidebar.vue';
 import AccountPanel from '@/components/AccountPanel.vue';
@@ -18,6 +19,10 @@ const isInitializing = ref(true);
 const userInfo = reactive({ isLoggedIn: false, uname: '', face: '', level: 0, uid: '', money: 0, bcoin: 0, following: 0, follower: 0, dynamic_count: 0, current_exp: 0, next_exp: 0 });
 const globalForm = reactive({ roomId: '', cookie: '', csrf: '', title: '', area: '', subArea: '' });
 const liveState = reactive({ isLive: false, rtmp1: {}, rtmp2: {}, srt: {} });
+
+// 托盘人脸认证弹窗状态
+const showTrayFaceVerify = ref(false);
+const trayFaceVerifyQr = ref('');
 
 const modalState = reactive({ visible: false, title: '', content: '', type: 'info' });
 const showModal = (title, content, type = 'info') => { modalState.title = title; modalState.content = content; modalState.type = type; modalState.visible = true; };
@@ -97,6 +102,43 @@ onMounted(async () => {
       await tryRefreshUserInfo();
     }
   } catch (e) { console.error(e); } finally { isInitializing.value = false; }
+
+  // --- 注册托盘事件处理函数 ---
+  window.onTrayLiveStarted = (data) => {
+    liveState.isLive = true;
+    if (data) {
+      liveState.rtmp1 = data.rtmp1 || {};
+      liveState.rtmp2 = data.rtmp2 || {};
+      liveState.srt = data.srt || {};
+    }
+    activeTab.value = 'rtmp';
+    showModal('成功', '托盘开播成功！推流码已生成', 'success');
+  };
+
+  window.onTrayNeedFaceVerify = async (qrUrl) => {
+    try {
+      trayFaceVerifyQr.value = await QRCode.toDataURL(qrUrl, { width: 200, margin: 2 });
+    } catch (e) {
+      trayFaceVerifyQr.value = '';
+    }
+    showTrayFaceVerify.value = true;
+  };
+
+  window.onTrayLiveStopped = () => {
+    liveState.isLive = false;
+    showModal('提示', '直播已通过托盘停止', 'success');
+  };
+
+  window.onTrayLiveError = (msg) => {
+    showModal('托盘开播失败', msg || '未知错误', 'error');
+  };
+});
+
+onUnmounted(() => {
+  window.onTrayLiveStarted = null;
+  window.onTrayNeedFaceVerify = null;
+  window.onTrayLiveStopped = null;
+  window.onTrayLiveError = null;
 });
 
 const fillUserState = (user) => {
@@ -172,6 +214,26 @@ const handleSidebarAccountClick = () => {
 
     <MessageModal :visible="modalState.visible" :title="modalState.title" :content="modalState.content" :type="modalState.type" @close="modalState.visible = false" />
     <UserAccountModal v-if="showAccountManager" :visible="showAccountManager" :current-user="userInfo" @close="showAccountManager = false" @switch="onSwitchAccount" @logout="onLogout" />
+
+    <!-- 托盘触发的人脸认证弹窗 -->
+    <Teleport to="body">
+      <div v-if="showTrayFaceVerify" class="modal-overlay" @click.self="showTrayFaceVerify=false">
+        <div class="modal tray-verify-modal">
+          <div class="tray-verify-header">
+            <h3>需要人脸认证</h3>
+            <button class="tray-close-btn" @click="showTrayFaceVerify=false">×</button>
+          </div>
+          <div class="tray-qr-container">
+            <div class="tray-qr-box">
+              <img v-if="trayFaceVerifyQr" :src="trayFaceVerifyQr">
+            </div>
+            <div class="tray-qr-loading" v-if="!trayFaceVerifyQr">加载中...</div>
+          </div>
+          <p class="tray-verify-tip">请使用 <strong>Bilibili App</strong> 扫码完成认证</p>
+          <button class="btn btn-primary tray-verify-done" @click="showTrayFaceVerify=false">我已完成认证</button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -200,4 +262,18 @@ const handleSidebarAccountClick = () => {
 .loading-screen { height: 100vh; width: 100vw; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg-color); color: var(--text-sub); }
 .spinner { width: 40px; height: 40px; border: 4px solid #f3f3f3; border-top: 4px solid var(--primary-color); border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 16px; }
 @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+/* 托盘人脸认证弹窗 */
+.modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+.tray-verify-modal { width: 340px; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 32px rgba(0,0,0,0.15); }
+.tray-verify-header { padding: 16px 20px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+.tray-verify-header h3 { margin: 0; font-size: 16px; color: var(--text-main); }
+.tray-close-btn { background: none; border: none; font-size: 24px; color: #999; cursor: pointer; line-height: 1; }
+.tray-close-btn:hover { color: #333; }
+.tray-qr-container { padding: 30px; background: #f8f9fa; position: relative; display: flex; justify-content: center; }
+.tray-qr-box { background: white; padding: 12px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+.tray-qr-box img { display: block; }
+.tray-qr-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #999; }
+.tray-verify-tip { padding: 0 20px; margin: 20px 0; font-size: 14px; color: #444; text-align: center; }
+.tray-verify-done { width: calc(100% - 40px); margin: 0 20px 20px 20px; height: 44px; }
 </style>
