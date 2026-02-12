@@ -136,6 +136,11 @@ if __name__ == '__main__':
     def tray_show_window():
         window.restore()
         window.show()
+        # 通知前端恢复轮询等操作
+        try:
+            api.window_service.send_to_frontend("onAppShown", None)
+        except Exception:
+            pass
 
     def tray_start_live():
         user_config = api.user_service.load_saved_config()
@@ -206,6 +211,11 @@ if __name__ == '__main__':
             if min_to_tray:
                 # 最小化到托盘
                 window.hide()
+                # [Fix] 异步通知前端暂停轮询，不能同步调用 evaluate_js，否则在 UI 线程死锁
+                threading.Thread(
+                    target=lambda: api.window_service.send_to_frontend("onAppHidden", None),
+                    daemon=True
+                ).start()
                 return False  # 阻止窗口关闭
             else:
                 # 直接退出模式
@@ -214,6 +224,12 @@ if __name__ == '__main__':
                     tray_icon.stop()
 
                 cleanup_services(api)
+
+                # [Fix] Linux 下必须强制退出，否则后台线程（asyncio loop 等）导致 SIGABRT
+                if sys.platform != 'win32':
+                    print("Exiting application...")
+                    os._exit(0)
+
                 return True  # 允许窗口关闭 (pywebview 会退出)
         except Exception as e:
             print(f"Error in on_closing: {e}")

@@ -10,9 +10,31 @@ const qrImgUrl = ref('');
 const qrStatusText = ref('正在获取二维码...');
 const isExpired = ref(false);
 let pollTimer = null;
+let savedQrcodeKey = null; // 保存 key 用于恢复轮询
+
+const startPolling = (key) => {
+  if (pollTimer) clearInterval(pollTimer);
+  savedQrcodeKey = key;
+  pollTimer = setInterval(async () => {
+    const status = await pollLoginStatus(key);
+    if (status.code === 0) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      emit('success', status.data);
+    } else if (status.code === 86090) {
+      qrStatusText.value = '✅ 扫码成功，请在手机上确认';
+    } else if (status.code === 86038) {
+      qrStatusText.value = '⚠️ 二维码已过期';
+      isExpired.value = true;
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }, 1500);
+};
 
 const loadQrCode = async () => {
   if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null;
   isExpired.value = false;
   qrStatusText.value = '加载中...';
 
@@ -20,27 +42,41 @@ const loadQrCode = async () => {
   if (res && res.url) {
     qrImgUrl.value = await QRCode.toDataURL(res.url, { width: 180, margin: 2 });
     qrStatusText.value = '请使用 Bilibili App 扫码';
-
-    pollTimer = setInterval(async () => {
-      const status = await pollLoginStatus(res.qrcode_key);
-      if (status.code === 0) {
-        clearInterval(pollTimer);
-        emit('success', status.data);
-      } else if (status.code === 86090) {
-        qrStatusText.value = '✅ 扫码成功，请在手机上确认';
-      } else if (status.code === 86038) {
-        qrStatusText.value = '⚠️ 二维码已过期';
-        isExpired.value = true;
-        clearInterval(pollTimer);
-      }
-    }, 1500);
+    startPolling(res.qrcode_key);
   } else {
     qrStatusText.value = '获取失败，请检查网络';
   }
 };
 
-onMounted(loadQrCode);
-onUnmounted(() => { if (pollTimer) clearInterval(pollTimer); });
+// [Fix] 监听后端推送的窗口隐藏/显示事件，暂停/恢复轮询
+// pywebview 的 window.hide() 不触发浏览器 visibilitychange
+const _prevOnAppHidden = window.onAppHidden;
+const _prevOnAppShown = window.onAppShown;
+
+window.onAppHidden = (...args) => {
+  if (_prevOnAppHidden) _prevOnAppHidden(...args);
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+};
+
+window.onAppShown = (...args) => {
+  if (_prevOnAppShown) _prevOnAppShown(...args);
+  if (!pollTimer && savedQrcodeKey && !isExpired.value) {
+    startPolling(savedQrcodeKey);
+  }
+};
+
+onMounted(() => {
+  loadQrCode();
+});
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
+  // 恢复原始处理器
+  window.onAppHidden = _prevOnAppHidden;
+  window.onAppShown = _prevOnAppShown;
+});
 </script>
 
 <template>
