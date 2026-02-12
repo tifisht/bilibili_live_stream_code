@@ -108,6 +108,16 @@ if __name__ == '__main__':
 
         window.show()
 
+        # [Fix] Linux (Qt backend): 防止隐藏最后一个窗口时 Qt 自动退出
+        if sys.platform != 'win32':
+            try:
+                from qtpy.QtWidgets import QApplication
+                app = QApplication.instance()
+                if app:
+                    app.setQuitOnLastWindowClosed(False)
+            except Exception as e:
+                print(f"Failed to set quitOnLastWindowClosed: {e}")
+
     # --- 全局清理逻辑 ---
     def cleanup_services(api_service):
         """执行清理工作：停止直播、停止弹幕、保存配置"""
