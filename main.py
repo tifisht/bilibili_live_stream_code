@@ -127,20 +127,103 @@ if __name__ == '__main__':
         except Exception as e:
             print(f"Cleanup failed: {e}")
 
-    # --- 托盘图标逻辑 (Windows Only) ---
+    # --- 全局标志 ---
+    import threading
+    tray_state = {'is_exiting': False}
+    tray_icon = None  # Windows pystray icon 引用
+
+    # --- 通用托盘回调（跨平台共享） ---
+    def tray_show_window():
+        window.restore()
+        window.show()
+
+    def tray_start_live():
+        user_config = api.user_service.load_saved_config()
+        if user_config and 'last_area_name' in user_config:
+            area = user_config['last_area_name']
+            if isinstance(area, list) and len(area) >= 2:
+                res = api.start_live(area[0], area[1])
+            else:
+                res = api.start_live()
+        else:
+            res = api.start_live()
+
+        # 恢复并显示窗口
+        window.restore()
+        window.show()
+
+        # 根据返回结果推送事件到前端
+        if res and res.get('code') == 0:
+            api.window_service.send_to_frontend("onTrayLiveStarted", res.get('data'))
+        elif res and res.get('code') == 60024:
+            api.window_service.send_to_frontend("onTrayNeedFaceVerify", res.get('qr', ''))
+        else:
+            msg = res.get('msg', '开播失败') if res else '开播失败'
+            api.window_service.send_to_frontend("onTrayLiveError", msg)
+
+    def tray_stop_live():
+        res = api.stop_live()
+        if res and res.get('code') == 0:
+            api.window_service.send_to_frontend("onTrayLiveStopped", None)
+
+    def tray_exit():
+        global tray_icon
+        tray_state['is_exiting'] = True
+
+        # 停止托盘图标
+        if sys.platform == 'win32':
+            if tray_icon:
+                tray_icon.stop()
+        else:
+            # Linux: 通过 Gtk.main_quit 停止 GTK 主循环
+            try:
+                import gi
+                gi.require_version('Gtk', '3.0')
+                from gi.repository import Gtk
+                Gtk.main_quit()
+            except Exception:
+                pass
+
+        print("Tray exit clicked. Cleaning up...")
+        cleanup_services(api)
+
+        print("Exiting application via Tray...")
+        os._exit(0)
+
+    # --- 通用 on_closing（跨平台共享） ---
+    def on_closing():
+        try:
+            if tray_state['is_exiting']:
+                return True  # 正在退出，允许关闭
+
+            # 检查配置
+            min_to_tray = True
+            try:
+                min_to_tray = api.config_manager.data.get("min_to_tray", True)
+            except Exception as e:
+                print(f"Error reading config: {e}")
+
+            if min_to_tray:
+                # 最小化到托盘
+                window.hide()
+                return False  # 阻止窗口关闭
+            else:
+                # 直接退出模式
+                tray_state['is_exiting'] = True
+                if sys.platform == 'win32' and tray_icon:
+                    tray_icon.stop()
+
+                cleanup_services(api)
+                return True  # 允许窗口关闭 (pywebview 会退出)
+        except Exception as e:
+            print(f"Error in on_closing: {e}")
+            return True
+
+    window.events.closing += on_closing
+
+    # --- 托盘图标逻辑 (平台分支) ---
     if sys.platform == 'win32':
-        import threading
-        # 延迟导入 PIL 和 pystray 以加快启动速度
-        # from PIL import Image
-        # import pystray
-        # from pystray import MenuItem as item
-
-        # 全局标志
-        tray_state = {'is_exiting': False}
-        tray_icon = None
-
-        def create_tray_icon(api_service, window_obj):
-            # 在线程内部导入，避免阻塞主线程
+        def create_tray_icon_win(window_obj):
             try:
                 from PIL import Image
                 import pystray
@@ -149,50 +232,10 @@ if __name__ == '__main__':
                 print(f"Failed to import tray dependencies: {e}")
                 return None
 
-            def on_show_window(icon, item):
-                window_obj.restore()
-                window_obj.show()
-
-            def on_start_live(icon, item):
-                user_config = api_service.user_service.load_saved_config()
-                if user_config and 'last_area_name' in user_config:
-                    area = user_config['last_area_name']
-                    if isinstance(area, list) and len(area) >= 2:
-                        res = api_service.start_live(area[0], area[1])
-                    else:
-                        res = api_service.start_live()
-                else:
-                    res = api_service.start_live()
-
-                # 恢复并显示窗口
-                window_obj.restore()
-                window_obj.show()
-
-                # 根据返回结果推送事件到前端
-                if res and res.get('code') == 0:
-                    api_service.window_service.send_to_frontend("onTrayLiveStarted", res.get('data'))
-                elif res and res.get('code') == 60024:
-                    api_service.window_service.send_to_frontend("onTrayNeedFaceVerify", res.get('qr', ''))
-                else:
-                    msg = res.get('msg', '开播失败') if res else '开播失败'
-                    api_service.window_service.send_to_frontend("onTrayLiveError", msg)
-
-            def on_stop_live(icon, item):
-                res = api_service.stop_live()
-                if res and res.get('code') == 0:
-                    api_service.window_service.send_to_frontend("onTrayLiveStopped", None)
-
-            def on_exit(icon, item):
-                tray_state['is_exiting'] = True
-                icon.stop()
-                
-                print("Tray exit clicked. Cleaning up...")
-                cleanup_services(api_service)
-
-                # [Fix] 直接退出进程，避免调用 delete/destroy 导致的跨线程死锁
-                # 销毁窗口可能会触发 on_closing，而 on_closing 在 UI 线程运行，可能导致死锁
-                print("Exiting application via Tray...")
-                os._exit(0)
+            def on_show(icon, item): tray_show_window()
+            def on_start(icon, item): tray_start_live()
+            def on_stop(icon, item): tray_stop_live()
+            def on_quit(icon, item): tray_exit()
 
             # 加载图标
             icon_image = None
@@ -207,70 +250,89 @@ if __name__ == '__main__':
                 icon_image = Image.new('RGB', (64, 64), color='red')
 
             menu = pystray.Menu(
-                item('显示主界面', on_show_window, default=True),
-                item('开始直播', on_start_live),
-                item('停止直播', on_stop_live),
-                item('退出程序', on_exit)
+                item('显示主界面', on_show, default=True),
+                item('开始直播', on_start),
+                item('停止直播', on_stop),
+                item('退出程序', on_quit)
             )
 
             icon = pystray.Icon("BiliLiveTool", icon_image, "B站直播工具", menu)
             return icon
 
-        def on_closing():
-            # 使用 print 而非 logger，避免在关闭期间发生 logging 死锁
-            try:
-                if tray_state['is_exiting']:
-                    return True # 正在退出，允许关闭
-                
-                # 检查配置
-                min_to_tray = True
-                try:
-                    min_to_tray = api.config_manager.data.get("min_to_tray", True)
-                except Exception as e:
-                    print(f"Error reading config: {e}")
-
-                if min_to_tray:
-                    # 最小化到托盘
-                    window.hide()
-                    return False # 阻止窗口关闭
-                else:
-                    # 直接退出模式
-                    tray_state['is_exiting'] = True
-                    if tray_icon:
-                        tray_icon.stop()
-                    
-                    cleanup_services(api)
-                    return True # 允许窗口关闭 (pywebview 会退出)
-            except Exception as e:
-                print(f"Error in on_closing: {e}")
-                # 发生错误时，为了防止卡死，允许关闭
-                return True
-
-        # 启动托盘图标线程 (异步加载，防止阻塞启动)
-        def run_tray():
+        def run_tray_win():
             global tray_icon
-            icon = create_tray_icon(api, window)
+            icon = create_tray_icon_win(window)
             if icon:
                 tray_icon = icon
                 tray_icon.run()
-        
-        threading.Thread(target=run_tray, daemon=True).start()
 
-        # 绑定关闭事件
-        window.events.closing += on_closing
+        threading.Thread(target=run_tray_win, daemon=True).start()
 
     else:
-        # 非 Windows 平台通用的退出逻辑
-        def on_non_win_closing():
-            # logger.info("Closing window on non-Windows platform...")
-            print("Closing window on non-Windows platform...")
-            cleanup_services(api)
-            
-            # [Fix] 强制退出，防止后台线程（如 asyncio loop）导致进程无法终止
-            print("Exiting application...")
-            os._exit(0)
-            return True
+        # --- Linux 托盘 (AppIndicator3) ---
+        def create_tray_icon_linux():
+            try:
+                import gi
+                gi.require_version('Gtk', '3.0')
+                gi.require_version('AyatanaAppIndicator3', '0.1')
+                from gi.repository import Gtk, AyatanaAppIndicator3, GLib
+            except (ImportError, ValueError) as e:
+                print(f"Linux tray dependencies not found ({e}). Running without tray.")
+                print("Install with: sudo apt install gir1.2-ayatanaappindicator3-0.1 gir1.2-gtk-3.0")
+                return
 
-        window.events.closing += on_non_win_closing
+            # 图标路径
+            if getattr(sys, 'frozen', False):
+                icon_path = os.path.join(sys._MEIPASS, 'bilibili.ico')
+            else:
+                icon_path = os.path.join(os.getcwd(), 'bilibili.ico')
+
+            # 如果 .ico 存在但 AppIndicator 不支持，尝试 .png
+            if not os.path.exists(icon_path):
+                icon_path = icon_path.replace('.ico', '.png')
+
+            indicator = AyatanaAppIndicator3.Indicator.new(
+                "bili-live-tool",
+                os.path.abspath(icon_path),
+                AyatanaAppIndicator3.IndicatorCategory.APPLICATION_STATUS
+            )
+            indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
+
+            menu = Gtk.Menu()
+
+            # 显示主界面
+            item_show = Gtk.MenuItem(label='显示主界面')
+            item_show.connect('activate', lambda _: GLib.idle_add(tray_show_window))
+            menu.append(item_show)
+
+            # 分隔线
+            menu.append(Gtk.SeparatorMenuItem())
+
+            # 开始直播
+            item_start = Gtk.MenuItem(label='开始直播')
+            item_start.connect('activate', lambda _: threading.Thread(target=tray_start_live, daemon=True).start())
+            menu.append(item_start)
+
+            # 停止直播
+            item_stop = Gtk.MenuItem(label='停止直播')
+            item_stop.connect('activate', lambda _: threading.Thread(target=tray_stop_live, daemon=True).start())
+            menu.append(item_stop)
+
+            # 分隔线
+            menu.append(Gtk.SeparatorMenuItem())
+
+            # 退出程序
+            item_exit = Gtk.MenuItem(label='退出程序')
+            item_exit.connect('activate', lambda _: tray_exit())
+            menu.append(item_exit)
+
+            menu.show_all()
+            indicator.set_menu(menu)
+
+            logger.info("Linux AppIndicator tray started.")
+            Gtk.main()
+
+        threading.Thread(target=create_tray_icon_linux, daemon=True).start()
 
     webview.start(center_and_show_window, window)
+

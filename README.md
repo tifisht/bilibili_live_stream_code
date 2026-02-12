@@ -49,6 +49,15 @@
    pip install pyinstaller Pillow
    ```
 
+   **Linux 托盘依赖（可选）**：如需系统托盘功能，请安装以下系统包：
+
+   ```bash
+   # Ubuntu / Debian
+   sudo apt install gir1.2-ayatanaappindicator3-0.1 gir1.2-gtk-3.0 libgirepository1.0-dev
+   ```
+
+   > 未安装时程序仍可正常运行，仅无托盘图标。
+
 4. **准备图标 (可选)**
 
    - **macOS (ico -> icns)**:
