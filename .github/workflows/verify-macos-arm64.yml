@@ -1,0 +1,119 @@
+{
+  "name": "Verify native macOS arm64 packaging",
+  "on": {
+    "push": {
+      "branches": [
+        "build/verify-macos-arm64"
+      ]
+    }
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "jobs": {
+    "build": {
+      "name": "Build on ${{ matrix.os }}",
+      "runs-on": "${{ matrix.os }}",
+      "strategy": {
+        "fail-fast": false,
+        "matrix": {
+          "include": [
+            {
+              "os": "macos-14",
+              "asset_name_suffix": "macos-arm64",
+              "pyinstaller_options": "--windowed",
+              "icon_ext": "icns",
+              "architecture": "arm64"
+            }
+          ]
+        }
+      },
+      "steps": [
+        {
+          "name": "Checkout repository",
+          "uses": "actions/checkout@v4",
+          "with": {
+            "ref": "${{ github.sha }}"
+          }
+        },
+        {
+          "name": "Set up Python",
+          "uses": "actions/setup-python@v7",
+          "with": {
+            "python-version": "3.9",
+            "architecture": "${{ matrix.architecture || 'x64' }}"
+          }
+        },
+        {
+          "name": "Verify macOS Python architecture",
+          "if": "runner.os == 'macOS'",
+          "env": {
+            "EXPECTED_ARCH": "${{ matrix.architecture == 'arm64' && 'arm64' || 'x86_64' }}"
+          },
+          "run": "python - <<'PY'\nimport os, platform\nactual = platform.machine()\nexpected = os.environ['EXPECTED_ARCH']\nassert actual == expected, f'Expected {expected}, got {actual}'\nprint(f'Building natively for {actual}')\nPY\n",
+          "shell": "bash"
+        },
+        {
+          "name": "Set up Node.js",
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": "18"
+          }
+        },
+        {
+          "name": "Build Frontend",
+          "run": "cd frontend\nnpm install\nnpm run build\n",
+          "shell": "bash"
+        },
+        {
+          "name": "Install Backend Dependencies",
+          "run": "pip install -r requirements.txt\npip install pyinstaller Pillow\n"
+        },
+        {
+          "name": "Install Linux Dependencies",
+          "if": "matrix.os == 'ubuntu-22.04'",
+          "run": "sudo apt-get update\nsudo apt-get install -y libnss3 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrender1 libxtst6 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-render0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 libxcb1 libxkbcommon-x11-0 libxkbcommon0\n"
+        },
+        {
+          "name": "Prepare Platform Icon",
+          "run": "if [ \"$RUNNER_OS\" == \"macOS\" ]; then\n  echo \"Converting ICO to ICNS for macOS...\"\n  sips -s format png bilibili.ico --out temp_icon.png\n  mkdir bilibili.iconset\n  sips -z 1024 1024 temp_icon.png --out bilibili.iconset/icon_512x512@2x.png\n  iconutil -c icns bilibili.iconset\n  rm -rf bilibili.iconset temp_icon.png\nelif [ \"${{ matrix.os }}\" == \"ubuntu-22.04\" ]; then\n  echo \"Converting ICO to PNG for Linux...\"\n  python -c \"from PIL import Image; Image.open('bilibili.ico').save('bilibili.png')\"\nfi\n",
+          "shell": "bash"
+        },
+        {
+          "name": "Generate Windows Version Info",
+          "if": "matrix.os == 'windows-latest'",
+          "run": "cat <<EOF > generate_version.py\nimport sys\n\ntag = \"v2.3.17\"\nclean_ver = tag.lstrip('v') \n\nparts = clean_ver.split('.')\nwhile len(parts) < 4: parts.append('0')\nver_tuple = tuple(map(int, parts[:4]))\nver_str = clean_ver\n\ncontent = f\"\"\"\n# UTF-8\nVSVersionInfo(\n  ffi=FixedFileInfo(\n    filevers={ver_tuple},\n    prodvers={ver_tuple},\n    mask=0x3f,\n    flags=0x0,\n    OS=0x40004,\n    fileType=0x1,\n    subtype=0x0,\n    date=(0, 0)\n  ),\n  kids=[\n    StringFileInfo(\n      [\n        StringTable(\n          u'040904B0',\n          [StringStruct(u'CompanyName', u'BiliLiveTool Open Source'),\n           StringStruct(u'FileDescription', u'BiliLiveTool Client'),\n           StringStruct(u'FileVersion', u'{ver_str}'),\n           StringStruct(u'InternalName', u'BiliLiveTool'),\n           StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Open Source'),\n           StringStruct(u'OriginalFilename', u'BiliLiveTool.exe'),\n           StringStruct(u'ProductName', u'BiliLiveTool'),\n           StringStruct(u'ProductVersion', u'{ver_str}')])\n      ]\n    ),\n    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])\n  ]\n)\n\"\"\"\n\nwith open(\"version_info.txt\", \"w\", encoding=\"utf-8\") as f:\n    f.write(content)\n    print(f\"Generated version_info.txt for version {ver_str}\")\nEOF\n\npython generate_version.py\n",
+          "shell": "bash"
+        },
+        {
+          "name": "Package with PyInstaller",
+          "run": "ICON_NAME=\"bilibili.${{ matrix.icon_ext }}\"\n\nEXTRA_ARGS=\"\"\nif [ \"${{ matrix.os }}\" == \"windows-latest\" ]; then\n   EXTRA_ARGS=\"--version-file=version_info.txt\"\n    pyinstaller main.py \\\n  --name BiliLiveTool \\\n  --onefile \\\n  --add-data \"frontend/dist:frontend/dist\" \\\n  --add-data \"bilibili.ico;.\" \\\n  --add-data \"VERSION;.\" \\\n  --icon \"$ICON_NAME\" \\\n  $EXTRA_ARGS \\\n  ${{ matrix.pyinstaller_options }}\nelif [ \"${{ matrix.os }}\" == \"ubuntu-22.04\" ]; then\n   pyinstaller main.py --name BiliLiveTool --onefile \\\n    --add-data \"frontend/dist:frontend/dist\" \\\n    --add-data \"bilibili.ico:.\" \\\n    --add-data \"VERSION:.\" \\\n    --hidden-import _cffi_backend \\\n    --hidden-import cffi \\\n    --hidden-import qtpy \\\n    --hidden-import PyQt5 \\\n    --hidden-import webview.platforms.qt\nelif [ \"$RUNNER_OS\" == \"macOS\" ]; then\n    pyinstaller main.py \\\n      --name BiliLiveTool \\\n      --onefile \\\n      --add-data \"frontend/dist:frontend/dist\" \\\n      --add-data \"bilibili.ico:.\" \\\n      --add-data \"VERSION:.\" \\\n      --icon \"$ICON_NAME\" \\\n      --hidden-import _cffi_backend \\\n      --target-architecture \"${{ matrix.architecture == 'arm64' && 'arm64' || 'x86_64' }}\" \\\n      $EXTRA_ARGS \\\n      ${{ matrix.pyinstaller_options }}\nfi\n",
+          "shell": "bash"
+        },
+        {
+          "name": "Verify macOS application",
+          "if": "runner.os == 'macOS'",
+          "env": {
+            "EXPECTED_ARCH": "${{ matrix.architecture == 'arm64' && 'arm64' || 'x86_64' }}"
+          },
+          "run": "APP=\"dist/BiliLiveTool.app\"\nfile \"$APP/Contents/MacOS/BiliLiveTool\"\ntest \"$(lipo -archs \"$APP/Contents/MacOS/BiliLiveTool\")\" = \"$EXPECTED_ARCH\"\ncodesign --verify --deep --strict \"$APP\"\n",
+          "shell": "bash"
+        },
+        {
+          "name": "Prepare Artifacts",
+          "run": "VERSION=\"v2.3.17\"\nif [ \"${{ matrix.os }}\" == \"windows-latest\" ]; then\n  EXE_NAME=\"BiliLiveTool.exe\"\n  ASSET_NAME=\"BiliLiveTool-${VERSION}-${{ matrix.asset_name_suffix }}.zip\"\n  mv dist/$EXE_NAME .\n  7z a $ASSET_NAME $EXE_NAME\nelif [ \"$RUNNER_OS\" == \"macOS\" ]; then\n  APP_NAME=\"BiliLiveTool.app\"\n  ASSET_NAME=\"BiliLiveTool-${VERSION}-${{ matrix.asset_name_suffix }}.zip\"\n  7z a -r $ASSET_NAME dist/$APP_NAME\nelse # Linux\n  ASSET_NAME=\"BiliLiveTool-${VERSION}-${{ matrix.asset_name_suffix }}.tar.gz\"\n  tar -czvf $ASSET_NAME -C dist BiliLiveTool\nfi\necho \"ASSET_NAME=${ASSET_NAME}\" >> $GITHUB_ENV\n",
+          "shell": "bash"
+        },
+        {
+          "name": "Upload Artifact",
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "BiliLiveTool-v2.3.17-${{ matrix.asset_name_suffix }}",
+            "path": "${{ env.ASSET_NAME }}",
+            "if-no-files-found": "error"
+          }
+        }
+      ]
+    }
+  }
+}
