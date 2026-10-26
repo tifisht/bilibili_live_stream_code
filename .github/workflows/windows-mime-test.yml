@@ -1,0 +1,83 @@
+name: Build Windows MIME fix test package
+
+on:
+  push:
+    branches:
+      - build/windows-mime-test
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.9'
+          architecture: x64
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Package Windows executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller main.py `
+            --name BiliLiveTool `
+            --onefile `
+            --noconsole `
+            --add-data "frontend/dist;frontend/dist" `
+            --add-data "bilibili.ico;." `
+            --add-data "VERSION;." `
+            --icon bilibili.ico
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path dist/BiliLiveTool.exe)) { throw 'Windows executable was not generated' }
+
+      - name: Include manual test notes and checksum
+        shell: pwsh
+        run: |
+          @"
+          BiliLiveTool v2.3.17 Windows x64 - MIME fix test package
+          Source commit: $env:GITHUB_SHA
+          Issue: https://github.com/ChaceQC/bilibili_live_stream_code/issues/67
+
+          This package fixes JavaScript/CSS MIME mappings before pywebview starts.
+          This is a test build, not an official release.
+
+          Manual checks:
+          1. Extract all files into a new folder, then open BiliLiveTool.exe.
+          2. Confirm the login page and sidebar render, and switch between panels.
+          3. Close and reopen the application, and check that the UI still renders.
+          4. If possible, test on both the affected computer and a working computer.
+
+          No registry changes are needed. Starting a live stream is not required.
+          If the UI is still blank, include logs/app.log from this extracted folder.
+          "@ | Set-Content dist/TEST-NOTES.txt -Encoding utf8
+          $hash = (Get-FileHash dist/BiliLiveTool.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  BiliLiveTool.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BiliLiveTool-v2.3.17-windows-amd64-mime-fix
+          path: |
+            dist/BiliLiveTool.exe
+            dist/TEST-NOTES.txt
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
