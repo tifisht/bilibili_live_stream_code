@@ -1,0 +1,249 @@
+name: Test Build BiliLiveTool
+
+on:
+  push:
+    branches:
+      - test/linux-scaling-ime
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TEST_VERSION: issue56-${{ github.run_number }}-${{ github.run_attempt }}
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    if: github.repository == 'tifisht/bilibili_live_stream_code'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15-intel, macos-14, windows-latest]
+        include:
+          - os: ubuntu-22.04
+            asset_name_suffix: linux-amd64
+            pyinstaller_options: ""
+            icon_ext: "png"
+          - os: macos-15-intel
+            asset_name_suffix: macos-amd64
+            pyinstaller_options: "--windowed"
+            icon_ext: "icns"
+            architecture: x64
+          - os: macos-14
+            asset_name_suffix: macos-arm64
+            pyinstaller_options: "--windowed"
+            icon_ext: "icns"
+            architecture: arm64
+          - os: windows-latest
+            asset_name_suffix: windows-amd64
+            pyinstaller_options: "--noconsole"
+            icon_ext: "ico"
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.sha }}
+
+    # 测试构建只写工作目录，不提交版本号，也不创建 Release
+    - name: Prepare Test Version
+      run: echo "$TEST_VERSION" > VERSION
+      shell: bash
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: '3.9'
+        architecture: ${{ matrix.architecture || 'x64' }}
+
+    - name: Verify macOS Python architecture
+      if: runner.os == 'macOS'
+      env:
+        EXPECTED_ARCH: ${{ matrix.architecture == 'arm64' && 'arm64' || 'x86_64' }}
+      run: |
+        python - <<'PY'
+        import os, platform
+        actual = platform.machine()
+        expected = os.environ['EXPECTED_ARCH']
+        assert actual == expected, f'Expected {expected}, got {actual}'
+        print(f'Building natively for {actual}')
+        PY
+      shell: bash
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Build Frontend
+      run: |
+        cd frontend
+        npm ci
+        npm run build
+      shell: bash
+
+    - name: Install Backend Dependencies
+      run: |
+        pip install -r requirements.txt
+        pip install pyinstaller Pillow
+
+    - name: Install Linux Dependencies
+      if: matrix.os == 'ubuntu-22.04'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libnss3 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrender1 libxtst6 libxcb-glx0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-render0 libxcb-shape0 libxcb-shm0 libxcb-sync1 libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 libxcb1 libxkbcommon-x11-0 libxkbcommon0
+
+    # --- 步骤：自动处理图标 (macOS转icns, Linux转png) ---
+    - name: Prepare Platform Icon
+      run: |
+        if [ "$RUNNER_OS" == "macOS" ]; then
+          echo "Converting ICO to ICNS for macOS..."
+          sips -s format png bilibili.ico --out temp_icon.png
+          mkdir bilibili.iconset
+          sips -z 1024 1024 temp_icon.png --out bilibili.iconset/icon_512x512@2x.png
+          iconutil -c icns bilibili.iconset
+          rm -rf bilibili.iconset temp_icon.png
+        elif [ "${{ matrix.os }}" == "ubuntu-22.04" ]; then
+          echo "Converting ICO to PNG for Linux..."
+          python -c "from PIL import Image; Image.open('bilibili.ico').save('bilibili.png')"
+        fi
+      shell: bash
+
+
+    # --- 步骤：(核心) 动态生成 Windows 版本信息 file ---
+    - name: Generate Windows Version Info
+      if: matrix.os == 'windows-latest'
+      run: |
+        cat <<EOF > generate_version.py
+        import sys
+        
+        clean_ver = "0.0.${{ github.run_number }}" 
+        
+        parts = clean_ver.split('.')
+        while len(parts) < 4: parts.append('0')
+        ver_tuple = tuple(map(int, parts[:4]))
+        ver_str = clean_ver
+        
+        content = f"""
+        # UTF-8
+        VSVersionInfo(
+          ffi=FixedFileInfo(
+            filevers={ver_tuple},
+            prodvers={ver_tuple},
+            mask=0x3f,
+            flags=0x0,
+            OS=0x40004,
+            fileType=0x1,
+            subtype=0x0,
+            date=(0, 0)
+          ),
+          kids=[
+            StringFileInfo(
+              [
+                StringTable(
+                  u'040904B0',
+                  [StringStruct(u'CompanyName', u'BiliLiveTool Open Source'),
+                   StringStruct(u'FileDescription', u'BiliLiveTool Client'),
+                   StringStruct(u'FileVersion', u'{ver_str}'),
+                   StringStruct(u'InternalName', u'BiliLiveTool'),
+                   StringStruct(u'LegalCopyright', u'Copyright (c) 2026 Open Source'),
+                   StringStruct(u'OriginalFilename', u'BiliLiveTool.exe'),
+                   StringStruct(u'ProductName', u'BiliLiveTool'),
+                   StringStruct(u'ProductVersion', u'{ver_str}')])
+              ]
+            ),
+            VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+          ]
+        )
+        """
+        
+        with open("version_info.txt", "w", encoding="utf-8") as f:
+            f.write(content)
+            print(f"Generated version_info.txt for version {ver_str}")
+        EOF
+        
+        python generate_version.py
+      shell: bash
+
+    - name: Package with PyInstaller
+      run: |
+        ICON_NAME="bilibili.${{ matrix.icon_ext }}"
+        
+        EXTRA_ARGS=""
+        if [ "${{ matrix.os }}" == "windows-latest" ]; then
+           EXTRA_ARGS="--version-file=version_info.txt"
+            pyinstaller main.py \
+          --name BiliLiveTool \
+          --onefile \
+          --add-data "frontend/dist:frontend/dist" \
+          --add-data "bilibili.ico;." \
+          --add-data "VERSION;." \
+          --icon "$ICON_NAME" \
+          $EXTRA_ARGS \
+          ${{ matrix.pyinstaller_options }}
+        elif [ "${{ matrix.os }}" == "ubuntu-22.04" ]; then
+           pyinstaller main.py --name BiliLiveTool --onefile \
+            --add-data "frontend/dist:frontend/dist" \
+            --add-data "bilibili.ico:." \
+            --add-data "VERSION:." \
+            --hidden-import _cffi_backend \
+            --hidden-import cffi \
+            --hidden-import qtpy \
+            --hidden-import PyQt5 \
+            --hidden-import webview.platforms.qt
+        elif [ "$RUNNER_OS" == "macOS" ]; then
+            pyinstaller main.py \
+              --name BiliLiveTool \
+              --onedir \
+              --add-data "frontend/dist:frontend/dist" \
+              --add-data "bilibili.ico:." \
+              --add-data "VERSION:." \
+              --icon "$ICON_NAME" \
+              --hidden-import _cffi_backend \
+              --target-architecture "${{ matrix.architecture == 'arm64' && 'arm64' || 'x86_64' }}" \
+              $EXTRA_ARGS \
+              ${{ matrix.pyinstaller_options }}
+        fi
+
+      shell: bash
+
+    - name: Verify macOS application
+      if: runner.os == 'macOS'
+      env:
+        EXPECTED_ARCH: ${{ matrix.architecture == 'arm64' && 'arm64' || 'x86_64' }}
+      run: |
+        APP="dist/BiliLiveTool.app"
+        file "$APP/Contents/MacOS/BiliLiveTool"
+        test "$(lipo -archs "$APP/Contents/MacOS/BiliLiveTool")" = "$EXPECTED_ARCH"
+        codesign --verify --deep --strict "$APP"
+      shell: bash
+
+    - name: Prepare Artifacts
+      run: |
+        VERSION="$TEST_VERSION"
+        if [ "${{ matrix.os }}" == "windows-latest" ]; then
+          EXE_NAME="BiliLiveTool.exe"
+          ASSET_NAME="BiliLiveTool-${VERSION}-${{ matrix.asset_name_suffix }}.zip"
+          mv dist/$EXE_NAME .
+          7z a $ASSET_NAME $EXE_NAME
+        elif [ "$RUNNER_OS" == "macOS" ]; then
+          APP_NAME="BiliLiveTool.app"
+          ASSET_NAME="BiliLiveTool-${VERSION}-${{ matrix.asset_name_suffix }}.zip"
+          7z a -snl -r $ASSET_NAME dist/$APP_NAME
+        else # Linux
+          ASSET_NAME="BiliLiveTool-${VERSION}-${{ matrix.asset_name_suffix }}.tar.gz"
+          tar -czvf $ASSET_NAME -C dist BiliLiveTool
+        fi
+        echo "ASSET_NAME=${ASSET_NAME}" >> $GITHUB_ENV
+      shell: bash
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: BiliLiveTool-${{ env.TEST_VERSION }}-${{ matrix.asset_name_suffix }}
+        path: ${{ env.ASSET_NAME }}
+        if-no-files-found: error
+        retention-days: 14
+
